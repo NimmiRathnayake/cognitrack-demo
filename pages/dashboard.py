@@ -1,5 +1,6 @@
-import streamlit as st, sqlite3, os, json
+import streamlit as st, sqlite3, os
 import pandas as pd, joblib
+import altair as alt
 from scipy import stats
 
 st.set_page_config(page_title="CogniTrack Researcher Dashboard", layout="wide")
@@ -62,8 +63,23 @@ c4.metric("Mean AI hours/day", f"{df['ai_hours'].mean():.1f}")
 # ---- cluster distribution + profiles ----
 st.subheader("Cluster distribution")
 left, right = st.columns(2)
-counts = df["cluster"].value_counts()
-left.bar_chart(counts)
+CLUSTER_ORDER = ["Independent thinkers", "Moderate AI users", "High AI dependency"]
+CLUSTER_COLORS = ["#0F766E", "#D97706", "#BE123C"]
+counts = df["cluster"].value_counts().reindex(CLUSTER_ORDER, fill_value=0)
+chart_df = pd.DataFrame({"cluster": counts.index, "n": counts.values})
+chart_df["label"] = [f"{n}  ({n / max(len(df), 1) * 100:.0f}%)" for n in chart_df["n"]]
+base = alt.Chart(chart_df).encode(
+    y=alt.Y("cluster:N", sort=CLUSTER_ORDER, title=None, axis=alt.Axis(labelLimit=220, labelFontSize=13)),
+)
+bars = base.mark_bar(size=34, cornerRadiusEnd=4).encode(
+    x=alt.X("n:Q", title="Number of participants",
+            scale=alt.Scale(domain=[0, max(int(chart_df["n"].max()) * 1.35, 2)]),
+            axis=alt.Axis(tickMinStep=1, format="d")),
+    color=alt.Color("cluster:N", scale=alt.Scale(domain=CLUSTER_ORDER, range=CLUSTER_COLORS), legend=None),
+)
+text = base.mark_text(align="left", dx=6, fontSize=13, fontWeight="bold").encode(
+    x="n:Q", text="label:N")
+left.altair_chart((bars + text).properties(height=230), width="stretch")
 right.dataframe(df.groupby("cluster")[FEATURES].mean().round(1), width='stretch')
 
 # ---- faculty comparison ----
@@ -92,27 +108,24 @@ if len(df) >= 10:
 else:
     st.caption("Need at least 10 participants for correlations.")
 
-# ---- completion time (live data only) ----
-st.subheader("Completion time")
-if "duration_sec" in df.columns:
-    fast = st.slider("Flag as too fast if under (seconds)", 10, 300, 60)
-    slow = st.slider("Flag as too slow if over (minutes)", 10, 120, 45)
+# ---- Section C completion time (live data only) ----
+st.subheader("Section C completion time")
+if "section_c_sec" in df.columns:
+    fast = st.slider("Flag as too fast if under (seconds)", 5, 300, 20)
+    slow = st.slider("Flag as too slow if over (minutes)", 5, 120, 30)
     d = df.copy()
     d["time_flag"] = "ok"
-    d.loc[d.duration_sec < fast, "time_flag"] = "too fast"
-    d.loc[d.duration_sec > slow * 60, "time_flag"] = "too slow"
+    d.loc[d.section_c_sec < fast, "time_flag"] = "too fast"
+    d.loc[d.section_c_sec > slow * 60, "time_flag"] = "too slow"
     t1, t2, t3 = st.columns(3)
-    t1.metric("Median", f"{d.duration_sec.median():.0f} s")
-    t2.metric("Fastest", f"{d.duration_sec.min():.0f} s")
-    t3.metric("Slowest", f"{d.duration_sec.max():.0f} s")
+    t1.metric("Median", f"{d.section_c_sec.median():.0f} s")
+    t2.metric("Fastest", f"{d.section_c_sec.min():.0f} s")
+    t3.metric("Slowest", f"{d.section_c_sec.max():.0f} s")
     st.write("Flag counts:", d["time_flag"].value_counts().to_dict())
-    st.caption("Flags are screening aids only. A fast time may mean careless answering; a slow time may mean the "
-               "participant left the page open. Review flagged rows before excluding anyone.")
-    pt = d["page_times"].apply(lambda s: pd.Series(json.loads(s))) if "page_times" in d else None
-    show = d[["pid", "faculty", "duration_sec", "time_flag", "cluster"]]
-    if pt is not None:
-        show = pd.concat([show, pt.add_prefix("t_")], axis=1)
-    st.dataframe(show, width='stretch', hide_index=True)
+    st.caption("Flags are screening aids only. A very fast time may mean careless answering; a very slow time may mean "
+               "the participant left the page open or used outside help. Review flagged rows before excluding anyone.")
+    st.dataframe(d[["pid", "faculty", "section_c_sec", "time_flag", "task_score", "cluster"]],
+                 width='stretch', hide_index=True)
     df = d
 else:
     st.caption("The simulated dataset has no timing data. Switch to Live demo responses.")
